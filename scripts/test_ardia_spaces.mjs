@@ -1,7 +1,7 @@
 // Checks for ardia-spaces.mjs. Run: node test_ardia_spaces.mjs
 import assert from 'node:assert/strict';
 import { resolveSpace, withScheme, samePageKey, pickExisting, tabsFromWindows, contextMap,
-  targetForTab, profileSteps, controlWsUrl, openPlan } from './ardia-spaces.mjs';
+  targetForTab, profileSteps, controlWsUrl, openPlan, parseWaitArgs, pollUntil } from './ardia-spaces.mjs';
 
 const PROFILES = [{ id: 'default', name: 'Personal' }, { id: 'p-work', name: 'Work' }];
 const WINDOWS = [{
@@ -87,6 +87,35 @@ const tests = {
   'another profile means switch there, create, switch back': () => {
     assert.deepEqual(openPlan({ found: null, target: 'Personal', front: 'Work' }), { kind: 'roundtrip', back: 'Work', quiet: true });
   },
+  // Handoff: wait for the user to finish something in the tab, then carry on.
+  'wait takes a condition, a timeout and a hand flag': () => {
+    assert.deepEqual(parseWaitArgs(['1A2B3C4D', '--until', '!!document.querySelector("#inbox")']),
+      { target: '1A2B3C4D', until: '!!document.querySelector("#inbox")', timeoutMs: 300000, intervalMs: 500, hand: false });
+    assert.deepEqual(parseWaitArgs(['1A2B3C4D', '--until=x > 2', '--timeout', '30', '--hand', '--interval=2000']),
+      { target: '1A2B3C4D', until: 'x > 2', timeoutMs: 30000, intervalMs: 2000, hand: true });
+    assert.throws(() => parseWaitArgs(['1A2B3C4D']), /--until/);
+    assert.throws(() => parseWaitArgs(['--until', 'x']), /target/);
+  },
+  'pollUntil returns the value that ended the wait': async () => {
+    let clock = 0;
+    const values = [false, false, 'signed in'];
+    const r = await pollUntil(async () => values.shift() ?? 'signed in', { intervalMs: 500, timeoutMs: 10000,
+      now: () => clock, sleep: async ms => { clock += ms; } });
+    assert.deepEqual(r, { ok: true, value: 'signed in', elapsed: 1000 });
+  },
+  'pollUntil gives up after the timeout and says what it last saw': async () => {
+    let clock = 0;
+    const r = await pollUntil(async () => false, { intervalMs: 500, timeoutMs: 1200,
+      now: () => clock, sleep: async ms => { clock += ms; } });
+    assert.deepEqual(r, { ok: false, value: false, elapsed: 1500 });
+  },
+  'pollUntil reports a failing check rather than hanging': async () => {
+    let clock = 0;
+    const r = await pollUntil(async () => { throw new Error('target closed'); }, { intervalMs: 500, timeoutMs: 5000,
+      now: () => clock, sleep: async ms => { clock += ms; } });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /target closed/);
+  },
   '--foreground keeps the old, visible behaviour': () => {
     assert.deepEqual(openPlan({ found: 't1', target: 'Work', front: 'Work', foreground: true }), { kind: 'reuse', quiet: false });
     assert.deepEqual(openPlan({ found: null, target: 'Personal', front: 'Work', foreground: true }), { kind: 'create', quiet: false, switchTo: 'Personal' });
@@ -94,7 +123,7 @@ const tests = {
 };
 let failed = 0;
 for (const [name, fn] of Object.entries(tests)) {
-  try { fn(); console.log('pass', name); } catch (e) { failed++; console.log('FAIL', name, '-', e.message); }
+  try { await fn(); console.log('pass', name); } catch (e) { failed++; console.log('FAIL', name, '-', e.message); }
 }
 process.exit(failed);
 

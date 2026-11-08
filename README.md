@@ -101,6 +101,7 @@ Without `install.sh`, the scripts run straight from the clone.
   node scripts/ardia-cdp.mjs html  <target> [selector]
   node scripts/ardia-cdp.mjs loadall <target> <selector> [ms]   # click "load more" until it's gone
   node scripts/ardia-cdp.mjs evalraw <target> <method> [json]   # any CDP method
+  node scripts/ardia-cdp.mjs wait  <target> --until "<js>" [--hand] [--timeout 300]
   node scripts/ardia-cdp.mjs stop [target]
   ```
 
@@ -123,6 +124,41 @@ everything else goes to the page.
 A background tab only draws when it's screenshotted, so its video plays at the screenshot rate (about five a second
 while the picture changes, back to back right after input). Set `ARDIA_PANE_LIVE=0` to always use screenshots.
 
+### Handing a tab to the user
+
+When a page needs the user — a login, a 2FA code, a payment — an agent shouldn't stop and wait for a report back.
+`wait` blocks in the background until the page says the user is done, and `--hand` puts the tab in front of them:
+
+```bash
+node scripts/ardia-cdp.mjs wait <target> --hand \
+  --until "!!document.querySelector('#inbox')" --timeout 300
+# waiting up to 300s for: !!document.querySelector('#inbox')
+# handed over: the tab is in front for the user
+# ready after 42.3s: true  https://mail.example.com/inbox
+```
+
+`--until` is a JS expression, evaluated in the page every `--interval` (500 ms); it ends when the result is truthy.
+Exit 0 means ready, 1 means the timeout passed (and it prints the last value it saw).
+
+### MCP server (any MCP client)
+
+`scripts/mcp-server.mjs` speaks MCP over stdio, so Cursor, Codex, Zed and anything else that supports MCP can drive
+Ardia with no extension and nothing installed:
+
+```bash
+node scripts/mcp-server.mjs        # newline-delimited JSON-RPC on stdio
+```
+
+Tools: `open_page` (quiet; takes `profile`, `foreground`), `list_tabs`, `read_page` (accessibility tree),
+`evaluate`, `navigate`, `click`, `type_text`, `screenshot` (returns the image), `wait_for` (`until`, `timeout`,
+`hand`). Each one is a call to the matching `ardia-cdp` command, so behaviour and Ardia's policy are identical.
+
+In Claude Code, register it with:
+
+```bash
+claude mcp add ardia -- node ~/.claude/skills/ardia/scripts/mcp-server.mjs
+```
+
 ### Goal-driven browsing (optional)
 
 `scripts/jev-browse.py "<goal>" --start <url>` lets [Jev](https://typesafe.ai) decide each step from the
@@ -144,7 +180,8 @@ default 20).
 ## Tests
 
 ```bash
-node scripts/test_ardia_spaces.mjs
+node scripts/test_ardia_spaces.mjs          # profiles, quiet open, handoff polling
+node --test scripts/test_mcp_server.mjs     # the MCP protocol and tool mapping
 node scripts/test_pane_render.mjs
 python3 scripts/test_jev_browse.py
 ```

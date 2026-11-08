@@ -206,3 +206,50 @@ export function openPlan({ found, target, front, foreground = false }) {
   if (target === front) return { kind: 'create', quiet: true };
   return { kind: 'roundtrip', back: front, quiet: true };
 }
+
+/**
+ * Arguments of `ardia-cdp wait <target> --until <js>`: block until the page says the user is done
+ * (signed in, past a 2FA prompt, payment confirmed), so an agent can hand a tab over and carry on.
+ *
+ *   --until <expr>   JS expression, evaluated in the page; truthy ends the wait (required)
+ *   --timeout <s>    give up after this many seconds (default 300)
+ *   --interval <ms>  how often to look (default 500)
+ *   --hand           put the tab in front of the user first, so they can act on it
+ */
+export function parseWaitArgs(args) {
+  const opts = { target: null, until: null, timeoutMs: 300000, intervalMs: 500, hand: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--until') opts.until = args[++i];
+    else if (a.startsWith('--until=')) opts.until = a.slice(8);
+    else if (a === '--timeout') opts.timeoutMs = Math.round(Number(args[++i]) * 1000);
+    else if (a.startsWith('--timeout=')) opts.timeoutMs = Math.round(Number(a.slice(10)) * 1000);
+    else if (a === '--interval') opts.intervalMs = Number(args[++i]);
+    else if (a.startsWith('--interval=')) opts.intervalMs = Number(a.slice(11));
+    else if (a === '--hand') opts.hand = true;
+    else if (!opts.target) opts.target = a;
+  }
+  if (!opts.target) throw new Error('wait: a target is required (a prefix from "ardia-cdp list")');
+  if (!opts.until) throw new Error('wait: --until <JS expression> is required, e.g. --until "location.pathname !== \'/login\'"');
+  if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) throw new Error('wait: --timeout must be seconds greater than 0');
+  if (!Number.isFinite(opts.intervalMs) || opts.intervalMs <= 0) throw new Error('wait: --interval must be milliseconds greater than 0');
+  return opts;
+}
+
+/**
+ * Asks `evaluate` for a value every `intervalMs` until `isDone(value)`, or the timeout passes.
+ * `now` and `sleep` are injectable so this can be tested without waiting.
+ * Resolves to { ok, value, elapsed }, or { ok: false, value, elapsed, error } if a check throws.
+ */
+export async function pollUntil(evaluate, { isDone = Boolean, intervalMs = 500, timeoutMs = 300000, now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  const t0 = now();
+  let value, error;
+  for (;;) {
+    try { value = await evaluate(); error = undefined; }
+    catch (e) { error = e.message || String(e); }
+    const elapsed = now() - t0;
+    if (!error && isDone(value)) return { ok: true, value, elapsed };
+    if (elapsed >= timeoutMs) return error ? { ok: false, value, elapsed, error } : { ok: false, value, elapsed };
+    await sleep(intervalMs);
+  }
+}

@@ -21,7 +21,7 @@ import { resolve } from 'path';
 import { spawn } from 'child_process';
 import net from 'net';
 import { ardiaTabs, ardiaProfiles, resolveSpace, withScheme, samePageKey, pickExisting,
-  contextMap, targetForTab, switchToProfile, dataDir, controlFileWsUrl, openPlan } from './ardia-spaces.mjs';
+  contextMap, targetForTab, switchToProfile, dataDir, controlFileWsUrl, openPlan, parseWaitArgs, pollUntil } from './ardia-spaces.mjs';
 
 const TIMEOUT = 15000;
 const NAVIGATION_TIMEOUT = 30000;
@@ -779,6 +779,12 @@ Usage: ardia-cdp <command> [args]
                                     page doesn't move. --foreground shows it instead.
                                     per = Personal, work = Work (Arc's spaces are Ardia
                                     profiles). --new always opens a new tab.
+  wait  <target> --until <JS> [--timeout s] [--interval ms] [--hand]
+                                    Block until the page says the user is done (signed in,
+                                    past 2FA, payment confirmed): evaluates <JS> in the page
+                                    every --interval until it's truthy. --hand first brings
+                                    the tab to the front so the user can act on it. Run it
+                                    in the background: it waits up to --timeout (300s).
   tabs                              Every Ardia tab by profile (incl. not-yet-loaded ones)
   stop  [target]                    Stop daemon(s)
 
@@ -940,6 +946,40 @@ async function main() {
     }
     console.log('\n"-" = not loaded yet; "open <url> --space ..." opens it in that profile.');
     setTimeout(() => process.exit(0), 100);
+    return;
+  }
+
+  // Hand a tab to the user and wait for them: logins, 2FA, payments. The agent runs this in the
+  // background (it blocks), tells the user what to do, and continues when the condition is true.
+  if (cmd === 'wait' || cmd === 'waitfor') {
+    const opts = parseWaitArgs(args);
+    const pages = existsSync(PAGES_CACHE) ? JSON.parse(readFileSync(PAGES_CACHE, 'utf8')) : [];
+    if (!pages.length) { console.error('No page list cached. Run "ardia-cdp list" first.'); process.exit(1); }
+    const targetId = resolvePrefix(opts.target, pages.map(p => p.targetId), 'target', 'Run "ardia-cdp list".');
+    const cdp = new CDP();
+    await cdp.connect(await getWsUrl());
+    const sid = (await cdp.send('Target.attachToTarget', { targetId, flatten: true })).sessionId;
+    if (opts.hand) {
+      // Puts the tab in front of the user, paging the window to its profile if need be.
+      await cdp.send('Target.activateTarget', { targetId });
+      console.log('handed over: the tab is in front for the user');
+    }
+    const where = () => cdp.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid)
+      .then(r => r.result?.value ?? '').catch(() => '');
+    console.log(`waiting up to ${Math.round(opts.timeoutMs / 1000)}s for: ${opts.until}`);
+    const r = await pollUntil(
+      () => cdp.send('Runtime.evaluate', { expression: opts.until, returnByValue: true }, sid)
+        .then(res => { if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'the expression threw'); return res.result?.value; }),
+      { intervalMs: opts.intervalMs, timeoutMs: opts.timeoutMs });
+    const url = await where();
+    cdp.close();
+    if (r.ok) {
+      console.log(`ready after ${(r.elapsed / 1000).toFixed(1)}s: ${JSON.stringify(r.value)}${url ? `  ${url}` : ''}`);
+      setTimeout(() => process.exit(0), 100);
+    } else {
+      console.log(`not ready after ${(r.elapsed / 1000).toFixed(1)}s: last saw ${JSON.stringify(r.value)}${r.error ? ` (${r.error})` : ''}${url ? `  ${url}` : ''}`);
+      setTimeout(() => process.exit(1), 100);
+    }
     return;
   }
 

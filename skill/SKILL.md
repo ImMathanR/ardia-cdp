@@ -1,20 +1,20 @@
 ---
 name: ardia
-description: Open, check, inspect and drive web pages in the Ardia browser via the Chrome DevTools Protocol, in the right Ardia profile ("per" = Personal, "work" = Work; Arc's spaces became Ardia profiles), reusing a tab that already shows the page instead of opening a duplicate; also show a tab live inside a terminal pane (only after the user asks to open, look at, check, debug, or drive a page in Ardia; requires Ardia's "Let the ardia command control Ardia" setting on).
+description: Open, check, inspect and drive web pages in the Ardia browser (Arc's replacement) via the Chrome DevTools Protocol, in the right Ardia profile ("per" = Personal, "work" = Work; Arc's spaces became Ardia profiles), reusing a tab that already shows the page instead of opening a duplicate (only after the user asks to open, look at, check, debug, or drive a page in Ardia; requires Ardia running with ARDIA_REMOTE_DEBUGGING_PORT and "Let the ardia command control Ardia" on).
 ---
 
 # Ardia CDP
 
-Lightweight Chrome DevTools Protocol CLI for the [Ardia](https://github.com/mantrakp04/ardia) browser, the open-source
-Chromium browser with Arc's sidebar. Same commands and the same per/work behaviour as `/arc` (arc-cdp). Arc's spaces
-import into Ardia as **profiles**, each with its own logins, so "space" below means an Ardia profile.
+The `/arc` skill, ported to [Ardia](https://github.com/mantrakp04/ardia), the open-source Chromium browser with Arc's
+sidebar. Same commands, same per/work behaviour. Arc's spaces import into Ardia as **profiles**, each with its own
+logins, so "space" below means an Ardia profile.
 
 The engine is `~/.claude/skills/ardia/scripts/ardia-cdp.mjs`, referred to as `ardia-cdp`; run it with
 `node ~/.claude/skills/ardia/scripts/ardia-cdp.mjs <command>`.
 
 ## Prerequisites
 
-Everything goes through Settings › **Let the ardia command control Ardia** (on; a small "ardia is controlling Ardia"
+Everything goes through Settings › "Let the ardia command control Ardia" (on; a small "ardia is controlling Ardia"
 pill shows while a command runs). Check with `ardia windows`. It gives two channels:
 
 - **CDP over the token path.** `ardia-cdp` reads `<data dir>/Chromium/ArdiaControl.json` (port, browser path,
@@ -23,10 +23,11 @@ pill shows while a command runs). Check with `ardia windows`. It gives two chann
   (upload), download behaviour, tracing, screencast and HTML5 drag interception. Everything else here works.
 - **The control socket**, for what CDP can't see: which profile each tab is in, and switching profiles.
 
-A released, signed Ardia ignores `ARDIA_REMOTE_DEBUGGING_PORT` on the real profile; it opens a plain, unrestricted
-port only for a scratch `ARDIA_DATA_DIR` or a self-built app. If that variable is set for GUI apps (for example by a
-LaunchAgent), `ardia-cdp` tries that port first and falls back to the token path. If a task truly needs a refused
-method on the user's real logins, say so; don't work around the policy.
+The signed Ardia ignores `ARDIA_REMOTE_DEBUGGING_PORT` on the real profile (it opens a plain, unrestricted port only
+for a scratch `ARDIA_DATA_DIR` or a self-built, non-team-signed app: `ArdiaHost+Launch.mm`, `port && mockKeychain`).
+The `com.ardia.debug-env` LaunchAgent still sets it to 9224, which helps scratch instances; `ardia-cdp` tries that port
+first and falls back to the token path. If a task truly needs a refused method on the user's real logins, say so;
+don't work around the policy.
 
 Node.js 22+. Override the port with `ARDIA_CDP_PORT` / `ARDIA_CDP_HOST`, and the data dir (for a scratch instance)
 with `ARDIA_DATA_DIR`.
@@ -47,7 +48,14 @@ ardia-cdp open <url> --space work    # work -> the Work profile
   the requested profile and prints `Also open in <profile>`.
 - A tab that's asleep (Ardia freezes background tabs past your latest few, and sleeps them after 30 min) has no CDP
   target, so `open` opens a fresh tab rather than waking it.
-- It prints the target to use for everything else, e.g. `Reused open tab in Work: 2BAE3E8E  Title  URL`.
+- **Quiet by default: the user's page and profile never move.** A new tab is created in the background (Ardia's
+  `background` flag) and is not activated; a page already open is used where it is. When the page belongs to a
+  profile that isn't in front, the window switches there, opens the tab, and switches straight back — the user may
+  see a brief flip, but ends up on the page and profile they had. Pass `--foreground` only when the user asked to
+  *see* the page in Ardia: it shows the tab and stays in its profile, the old behaviour.
+- It prints the target to use for everything else, e.g. `Using open tab (left in the background) in Work: 2BAE3E8E
+  Title  URL`. Drive it with `eval`/`snap`/`click` as usual: CDP reaches a background tab fine (this is also how
+  `/ardia`'s pane shows one).
 - `--new` forces a fresh tab. `ardia-cdp tabs` lists every tab by profile with its target prefix (`-` = asleep).
 
 ## Commands
@@ -78,41 +86,44 @@ DPR it prints. Avoid index-based selection across several `eval` calls when the 
 The first command against a tab starts a daemon holding its CDP session (instant after that); it exits after 20 min
 idle, when the tab closes, or with `ardia-cdp stop`.
 
+## Handing a tab to the user (`wait`)
+
+When a page needs the user — a login, a 2FA code, a payment — don't stop and ask them to report back. Open (or use)
+the tab, then run `wait` **in the background** and tell them what to do; it returns when the page says they're done:
+
+```bash
+ardia-cdp wait <target> --hand --until "!!document.querySelector('#inbox')" --timeout 300
+# prints: handed over… then: ready after 42.3s: true  https://mail.example.com/inbox
+```
+
+- `--until` is a JS expression evaluated in the page every `--interval` (500 ms); truthy ends the wait.
+- `--hand` first puts the tab in front of the user (paging the window to its profile), so they can act on it.
+- Exit 0 when ready, 1 on timeout (it prints the last value it saw, so you can tell what they're looking at).
+- Pick a condition that only holds *after* the step, not one that is already true; `--until "location.pathname !== '/login'"`
+  is the usual one. Check first with `eval` if unsure.
+
+## MCP server (`mcp-server.mjs`)
+
+For MCP clients that aren't Claude Code — Cursor, Codex, Zed, or anything that speaks MCP over stdio:
+
+```bash
+node ~/.claude/skills/ardia/scripts/mcp-server.mjs          # stdio, newline-delimited JSON-RPC
+```
+
+Tools: `open_page` (quiet, `profile`, `foreground`), `list_tabs`, `read_page`, `evaluate`, `navigate`, `click`,
+`type_text`, `screenshot` (returns the image), `wait_for` (`until`, `timeout`, `hand`). Each is a call to the same
+`ardia-cdp` command, so behaviour and policy are identical. Nothing is installed: point the client at this file.
+
 ## Ardia's own command line
 
 Ardia ships the `ardia` command (in `~/.local/bin`), useful beyond `ardia-cdp`:
 
 - `ardia windows [--json]`: every window and tab with its profile. `ardia run <command>`: run Ardia's own commands
-  (`ardia commands` lists them: `newTab`, `nextProfile`, `toggleSidebar`, `cleanUpTabs`, splits…).
+  (`ardia commands` lists the 97 allowed: `newTab`, `nextProfile`, `toggleSidebar`, `cleanUpTabs`, splits…).
   `ardia events` / `ardia on tab.navigated -- prog`: react to browser events.
 - `ardia browse <agent-browser args>`: agent-browser's command line on the running Ardia (`open`, `snapshot -i`,
   `click @e1`, `fill`, `screenshot`…), acting in the front window's profile, through the same token path and policy.
-- `ardia exec '<python>'`: run Python against the running Ardia (top-level await; `tab`, `tabs`, `new_tab`, `js`,
-  `history`, `windows`, `run`, `events` are in scope).
 - `ardia config set KEY VALUE` edits `~/.config/ardia/config.json` (Ardia reads it live).
-
-## A tab live inside a terminal pane (`ardia-pane.mjs`)
-
-Shows one Ardia tab — not the whole window — inside a terminal pane, and works while the tab is in the **background**
-behind other tabs. Clicks, scrolls and keys in the pane go back to the page over CDP.
-
-```bash
-ardia-pane.mjs <url> [--space per|work] [--split]   # open (or reuse) the page and show it here
-ardia-pane.mjs --target <prefix>                    # a tab that is already open
-```
-
-- Needs **Ghostty** (kitty graphics, passed through tmux with `allow-passthrough on`) and **tmux** for `--split`.
-- When the tab is in front, a small ScreenCaptureKit helper (`bin/ardia-frames`, built from `ardia-frames.swift`)
-  streams the window: GPU-scaled, shared memory, near instant. It needs **Screen Recording** permission for the
-  terminal.
-- When the tab is in the background, Ardia's own policy refuses screencasts, so the pane takes CDP screenshots; a
-  background tab only draws when screenshotted, so its video plays at the screenshot rate (about 5 a second while
-  the picture changes, back to back right after input).
-- Keys: `^L` go to URL, `^R` reload, `^O` back, `^Q` quit. Everything else goes to the page.
-- `ARDIA_PANE_LIVE=0` forces the screenshot path; `ARDIA_PANE_LOG=<file>` writes a timeline of frames.
-
-Use it when the user wants to watch or drive a page without leaving the terminal. Don't start it unprompted: it
-takes a real pane and, on the screenshot path, a few percent of CPU.
 
 ## Goal-driven browsing with Jev (`jev-browse.py`)
 
@@ -130,12 +141,9 @@ bounded (`--max-steps`, default 20); drive anything irreversible yourself.
 
 ## Tests
 
-```bash
-node scripts/test_ardia_spaces.mjs    # profile/tab mapping
-node scripts/test_pane_render.mjs     # pane drawing and input helpers
-python3 scripts/test_jev_browse.py   # the Jev loop, with a fake browser
-```
-
+`node scripts/test_ardia_spaces.mjs` (profile/tab mapping, quiet open, handoff polling),
+`node --test scripts/test_mcp_server.mjs` (the MCP protocol and tool mapping),
+`node scripts/test_pane_render.mjs` (pane drawing and input) and `python3 scripts/test_jev_browse.py`.
 End to end against a scratch instance (never the user's profile):
 
 ```bash
