@@ -21,7 +21,7 @@ import { resolve } from 'path';
 import { spawn } from 'child_process';
 import net from 'net';
 import { ardiaTabs, ardiaProfiles, resolveSpace, withScheme, samePageKey, pickExisting,
-  contextMap, targetForTab, switchToProfile, dataDir, controlFileWsUrl } from './ardia-spaces.mjs';
+  contextMap, targetForTab, switchToProfile, dataDir, controlFileWsUrl, openPlan } from './ardia-spaces.mjs';
 
 const TIMEOUT = 15000;
 const NAVIGATION_TIMEOUT = 30000;
@@ -771,9 +771,12 @@ Usage: ardia-cdp <command> [args]
                                     Optional interval in ms between clicks (default 1500)
   evalraw <target> <method> [json]  Send a raw CDP command; returns JSON result
                                     e.g. evalraw <t> "DOM.getDocument" '{}'
-  open  <url> [--space per|work|<name>] [--new]
-                                    Reuse the tab already showing <url> in that profile
-                                    (selects it), else open it there. Prints the target.
+  open  <url> [--space per|work|<name>] [--new] [--foreground]
+                                    Reuse the tab already showing <url> in that profile,
+                                    else open it there. Prints the target.
+                                    Quiet by default: the tab stays in the background and
+                                    the profile in front stays in front, so the user's
+                                    page doesn't move. --foreground shows it instead.
                                     per = Personal, work = Work (Arc's spaces are Ardia
                                     profiles). --new always opens a new tab.
   tabs                              Every Ardia tab by profile (incl. not-yet-loaded ones)
@@ -816,11 +819,12 @@ const NEEDS_TARGET = new Set([
 ]);
 
 function parseOpenArgs(args) {
-  const opts = { url: null, space: null, new: false };
+  const opts = { url: null, space: null, new: false, foreground: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--space') opts.space = args[++i];
     else if (args[i].startsWith('--space=')) opts.space = args[i].slice(8);
     else if (args[i] === '--new') opts.new = true;
+    else if (args[i] === '--foreground') opts.foreground = true;
     else if (!opts.url) opts.url = args[i];
   }
   return opts;
@@ -865,7 +869,10 @@ async function main() {
     return;
   }
 
-  // Open a page: reuse the tab already showing it (in the requested profile), else open it there
+  // Open a page: reuse the tab already showing it (in the requested profile), else open one there.
+  // Quiet by default: the tab is not brought to the front and the profile in front is left as it was,
+  // so an agent can open and explore pages without moving the user off what they're reading.
+  // --foreground asks for the old behaviour (show the tab, staying in its profile).
   if (cmd === 'open') {
     const opts = parseOpenArgs(args);
     const url = withScheme(opts.url || 'about:blank');
@@ -877,22 +884,30 @@ async function main() {
     const before = new Set(pagesNow.map(p => p.targetId));
     const { tab, elsewhere } = opts.new || !opts.url ? { tab: null, elsewhere: [] }
       : pickExisting(tabs, url, space, active);
-    let verb, where, page = null;
     // A tab that's asleep has no CDP target; treat it as not open and open a fresh one.
     const target = tab ? targetForTab(tab, pagesNow, contextMap(tabs, pagesNow)) : null;
-    if (target) {
-      // Activating a tab of another profile pages the window to that profile, as Arc's space focus did.
-      await cdp.send('Target.activateTarget', { targetId: target.targetId });
-      [verb, where, page] = ['Reused open tab', tab.space, target];
+    const want = space || active;
+    const plan = openPlan({ found: target ? tab.space : null, target: want, front: active, foreground: opts.foreground });
+    let verb, where, page = null;
+    if (plan.kind === 'reuse') {
+      if (!plan.quiet) await cdp.send('Target.activateTarget', { targetId: target.targetId });
+      [verb, where, page] = [plan.quiet ? 'Using open tab (left in the background)' : 'Reused open tab', tab.space, target];
     } else {
-      where = space || active;
+      where = plan.switchTo || want;
+      // A tab is created in the window's front profile, and the socket can't move a tab to another
+      // one (moveTabToProfile takes an argument, which it refuses), so the window goes there first.
       switchToProfile(where);
-      // Ardia opens a new target in the front window's profile.
-      const { targetId } = await cdp.send('Target.createTarget', { url });
-      await cdp.send('Target.activateTarget', { targetId });
-      verb = 'Opened new tab';
+      // Ardia opens a new target in the front window's profile. `background` keeps it off screen.
+      const { targetId } = await cdp.send('Target.createTarget', { url, background: plan.quiet });
+      // Only the foreground path has a reason to show it; and doing so here would page the window away.
+      if (!plan.quiet) await cdp.send('Target.activateTarget', { targetId });
+      verb = plan.quiet ? 'Opened tab in the background' : 'Opened new tab';
       const found = await findTarget(cdp, before, () => url);
       page = found.page || { targetId, title: '', url };
+      if (plan.kind === 'roundtrip') {
+        switchToProfile(plan.back);  // put the window back the way the user had it
+        verb += ` (${plan.back} kept in front)`;
+      }
     }
     const pages = await getPages(cdp);
     cdp.close();

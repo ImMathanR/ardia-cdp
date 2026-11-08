@@ -189,3 +189,20 @@ export function switchToProfile(name) {
   }
   throw new Error(`Couldn't switch Ardia to profile "${name}"`);
 }
+
+/**
+ * How `open` should get a page without disturbing the user.
+ *
+ *   reuse     — the page is already open in the profile asked for: use that tab where it is.
+ *   create    — open a background tab in the profile already in front: no switching at all.
+ *   roundtrip — the page belongs to another profile: switch there, open a background tab, switch back.
+ *
+ * `quiet` means: never activate the tab and never leave the front profile changed. `--foreground`
+ * asks for the old behaviour: show the tab, switching the window to its profile and staying there.
+ */
+export function openPlan({ found, target, front, foreground = false }) {
+  if (foreground) return found ? { kind: 'reuse', quiet: false } : { kind: 'create', quiet: false, switchTo: target };
+  if (found) return { kind: 'reuse', quiet: true };
+  if (target === front) return { kind: 'create', quiet: true };
+  return { kind: 'roundtrip', back: front, quiet: true };
+}

@@ -1,7 +1,7 @@
 // Checks for ardia-spaces.mjs. Run: node test_ardia_spaces.mjs
 import assert from 'node:assert/strict';
 import { resolveSpace, withScheme, samePageKey, pickExisting, tabsFromWindows, contextMap,
-  targetForTab, profileSteps, controlWsUrl } from './ardia-spaces.mjs';
+  targetForTab, profileSteps, controlWsUrl, openPlan } from './ardia-spaces.mjs';
 
 const PROFILES = [{ id: 'default', name: 'Personal' }, { id: 'p-work', name: 'Work' }];
 const WINDOWS = [{
@@ -76,9 +76,25 @@ const tests = {
     assert.deepEqual(profileSteps(order, 'a', 'd'), { command: 'previousProfile', count: 1 });
     assert.deepEqual(profileSteps(order, 'b', 'b'), { command: null, count: 0 });
   },
+  // A quiet open: the user's page and the profile in front must not change.
+  'a page already open is reused where it is, in the background': () => {
+    assert.deepEqual(openPlan({ found: 't1', target: 'Work', front: 'Work' }), { kind: 'reuse', quiet: true });
+    assert.deepEqual(openPlan({ found: 't1', target: 'Personal', front: 'Work' }), { kind: 'reuse', quiet: true });
+  },
+  'a new tab in the profile already in front is made without switching': () => {
+    assert.deepEqual(openPlan({ found: null, target: 'Work', front: 'Work' }), { kind: 'create', quiet: true });
+  },
+  'another profile means switch there, create, switch back': () => {
+    assert.deepEqual(openPlan({ found: null, target: 'Personal', front: 'Work' }), { kind: 'roundtrip', back: 'Work', quiet: true });
+  },
+  '--foreground keeps the old, visible behaviour': () => {
+    assert.deepEqual(openPlan({ found: 't1', target: 'Work', front: 'Work', foreground: true }), { kind: 'reuse', quiet: false });
+    assert.deepEqual(openPlan({ found: null, target: 'Personal', front: 'Work', foreground: true }), { kind: 'create', quiet: false, switchTo: 'Personal' });
+  },
 };
 let failed = 0;
 for (const [name, fn] of Object.entries(tests)) {
   try { fn(); console.log('pass', name); } catch (e) { failed++; console.log('FAIL', name, '-', e.message); }
 }
 process.exit(failed);
+

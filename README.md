@@ -16,7 +16,7 @@ The CLI is plain Node (22+) and has been used on macOS; the live pane is macOS +
 
 ```bash
 node ardia-cdp.mjs list                                   # open tabs, with the profile each is in
-node ardia-cdp.mjs open https://example.com --space work  # reuse the tab already showing it, or open it in Work
+node ardia-cdp.mjs open https://example.com --space work  # reuse the tab already showing it, or open it in Work, quietly
 node ardia-cdp.mjs eval <target> "document.title"
 node ardia-cdp.mjs shot <target> shot.png
 ```
@@ -41,6 +41,13 @@ its own logins. Two things make it different to automate than Chrome or Arc:
    "open this page in Work" would either land in the wrong profile (another account, another set of logins) or open
    a second copy of a page you already have. `ardia-cdp` asks Ardia for its own window/tab list over the control
    socket, maps targets to profiles, and switches windows when it needs to.
+
+3. **An agent working shouldn't move your page.** The usual way to open a tab for automation — activate it, or switch
+   the window to its profile — takes the user off whatever they were reading. `ardia-cdp open` is **quiet by
+   default**: the tab is created with Ardia's `background` flag, never activated, and an already-open page is used
+   where it is. When the page belongs to a profile that isn't in front, the window goes there, opens the tab and
+   switches straight back (a brief flip, then exactly where you were). `--foreground` asks for the visible
+   behaviour when you actually want to look at the page.
 
 ## How it works
 
@@ -83,7 +90,7 @@ Without `install.sh`, the scripts run straight from the clone.
 
   ```bash
   node scripts/ardia-cdp.mjs list                       # tabs by profile (id · title · url)
-  node scripts/ardia-cdp.mjs open  <url> --space per|work
+  node scripts/ardia-cdp.mjs open  <url> --space per|work [--foreground]
   node scripts/ardia-cdp.mjs snap  <target>             # accessibility tree (compact page structure)
   node scripts/ardia-cdp.mjs eval  <target> "document.title"
   node scripts/ardia-cdp.mjs click <target> "button.submit"

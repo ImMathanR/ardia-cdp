@@ -29,7 +29,8 @@ if (!prefix && !url) {
   process.exit(2);
 }
 if (!prefix) {
-  const out = execFileSync('node', [HERE + 'ardia-cdp.mjs', 'open', url, ...(space ? ['--space', space] : [])], { encoding: 'utf8' });
+  // --foreground: the pane's fast path streams the window, which only shows the tab the user can see.
+  const out = execFileSync('node', [HERE + 'ardia-cdp.mjs', 'open', url, '--foreground', ...(space ? ['--space', space] : [])], { encoding: 'utf8' });
   prefix = (/:\s+([0-9A-F]{6,})\s/.exec(out) || [])[1];
   if (!prefix) { console.error(out.trim()); process.exit(1); }
 }
