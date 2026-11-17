@@ -65,8 +65,8 @@ its own logins. Two things make it different to automate than Chrome or Arc:
   when the tab is in the background.
 
 What Ardia's policy refuses on the token path: cookies, emulation (viewport, device, user agent, geolocation),
-`DOM.setFileInputFiles` (uploads), download behaviour, tracing, screencast and HTML5 drag interception. Everything
-else in the command list works. `ardia-cdp` doesn't work around this — a task that needs one of those methods on your
+`DOM.setFileInputFiles` (uploads), download behaviour, tracing and screencast. Everything else in the command list
+works, including HTML5 drag interception (allowed since Ardia 0.2.45). `ardia-cdp` doesn't work around this — a task that needs one of those methods on your
 real logins is a task to do by hand.
 
 ## Install
