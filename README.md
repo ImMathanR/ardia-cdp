@@ -16,7 +16,7 @@
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TB
   A[Agent<br/>Claude Code · Codex · MCP client] -->|CLI or MCP| C[ardia-cdp]
   C -->|first call starts| D[per-tab daemon<br/>keeps the CDP session]
   D -->|CDP over WebSocket<br/>token from ArdiaControl.json| B[(Ardia)]
